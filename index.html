@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Geometry Dash Web - Account Mode</title>
+<style>
+  body { margin:0; background:#111; color:white; font-family:Arial, sans-serif; text-align:center; }
+  canvas { background:#222; display:none; margin:auto; display:block; border:2px solid #555; cursor:pointer; }
+  button, select, input { margin:5px; padding:5px 10px; font-size:16px; cursor:pointer; }
+  #loginMenu, #menu, #editorMenu { margin-top:20px; }
+  #starDisplay { margin:10px; font-size:18px; }
+</style>
+</head>
+<body>
+  <h1>Geometry Dash Web</h1>
+  <div id="loginMenu">
+    <h3>Đăng nhập / Guest</h3>
+    <input type="text" id="accountName" placeholder="Tên tài khoản">
+    <input type="password" id="accountPass" placeholder="Mật khẩu">
+    <button onclick="loginAccount()">Đăng nhập</button>
+    <button onclick="loginGuest()">Guest</button>
+    <div id="loginMsg" style="color:yellow;"></div>
+  </div>
+
+  <div id="starDisplay">Sao: 0</div>
+
+  <div id="menu" style="display:none;">
+    <div>
+      <label for="skinSelect">Chọn Skin:</label>
+      <select id="skinSelect"></select>
+    </div>
+    <div>
+      <button onclick="startGame(1)">Easy</button>
+      <button onclick="startGame(2)">Normal</button>
+      <button onclick="startGame(3)">Hard</button>
+      <button onclick="startGame(4)">Insane</button>
+      <button onclick="startGame(5)">Extreme Demon</button>
+      <button onclick="openEditor()">Level Editor</button>
+      <button onclick="logout()">Đăng xuất</button>
+    </div>
+  </div>
+
+  <div id="editorMenu" style="display:none;">
+    <button onclick="setEditorMode('obstacle')">Thêm Obstacle</button>
+    <button onclick="setEditorMode('portal')">Thêm Portal</button>
+    <select id="portalTypeSelect" onchange="portalType=this.value">
+      <option value="cube">Cube</option>
+      <option value="ball">Ball</option>
+      <option value="ufo">UFO</option>
+      <option value="wave">Wave</option>
+      <option value="robot">Robot</option>
+    </select>
+    <button onclick="playCustomLevel()">Chơi Level</button>
+    <button onclick="clearEditor()">Xóa tất cả</button>
+    <button onclick="closeEditor()">Thoát Editor</button>
+  </div>
+
+  <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameRunning = false;
+let player = { x:50, y:300, width:30, height:30, vy:0, onGround:true, type:'cube', color:'red' };
+let gravity = 0.8;
+let score = 0;
+let level = 1;
+
+// User system
+let currentUser = null; // {name, pass, stars, skins[], customLevels}
+let isGuest = false;
+
+let stars = 0;
+
+const portalsTypes = {
+  cube:{color:'red', shape:'rect'},
+  ball:{color:'blue', shape:'circle'},
+  ufo:{color:'green', shape:'rect'},
+  wave:{color:'cyan', shape:'wave'},
+  robot:{color:'orange', shape:'rect'}
+};
+
+const specialSkins = [
+  { name:'Rainbow Cube', requiredStars:10, color:'linear-gradient(to right, red, orange, yellow, green, blue, indigo, violet)', type:'cube' },
+  { name:'Neon Ball', requiredStars:20, color:'cyan', type:'ball' },
+  { name:'Ghost UFO', requiredStars:30, color:'gray', type:'ufo' }
+];
+
+const levels = [
+  { name:'Easy', bgColor:'#77aa77', speed:3, obstacles:[{x:900,y:350,width:20,height:30},{x:1200,y:330,width:20,height:50}], portals:[{x:1400,y:320,width:30,height:30,type:'ball'}]},
+  { name:'Normal', bgColor:'#7777aa', speed:4, obstacles:[{x:850,y:350,width:20,height:30},{x:1100,y:340,width:20,height:40},{x:1400,y:320,width:20,height:60}], portals:[{x:1700,y:320,width:30,height:30,type:'ufo'}]},
+  { name:'Hard', bgColor:'#aa7777', speed:5, obstacles:[{x:800,y:350,width:20,height:30},{x:1000,y:330,width:20,height:50},{x:1300,y:320,width:20,height:60},{x:1600,y:350,width:20,height:30}], portals:[{x:1900,y:320,width:30,height:30,type:'wave'}]},
+  { name:'Insane', bgColor:'#aa77aa', speed:6, obstacles:[{x:750,y:350,width:20,height:30},{x:900,y:320,width:20,height:60},{x:1150,y:340,width:20,height:40},{x:1400,y:320,width:20,height:60},{x:1650,y:350,width:20,height:30}], portals:[{x:2000,y:320,width:30,height:30,type:'robot'}]},
+  { name:'Extreme Demon', bgColor:'#aa2222', speed:8, obstacles:[{x:700,y:350,width:20,height:30},{x:850,y:320,width:20,height:60},{x:1050,y:340,width:20,height:40},{x:1300,y:320,width:20,height:60},{x:1550,y:350,width:20,height:30},{x:1800,y:330,width:20,height:50}], portals:[{x:2200,y:320,width:30,height:30,type:'cube'}]}
+];
+
+let currentObstacles = [];
+let currentPortals = [];
+
+// Editor
+let editorLevel = { obstacles:[], portals:[] };
+let mode = null;
+let portalType = 'cube';
+
+// Login / Guest
+function loginAccount(){
+  const name = document.getElementById('accountName').value;
+  const pass = document.getElementById('accountPass').value;
+  if(!name || !pass){document.getElementById('loginMsg').innerText='Điền tên và mật khẩu!'; return;}
+  let saved = JSON.parse(localStorage.getItem('GDusers')||'{}');
+  if(saved[name] && saved[name].pass === pass){
+    currentUser = saved[name];
+    stars = currentUser.stars;
+    isGuest=false;
+    showMenu();
+  } else if(!saved[name]){
+    // Tạo tài khoản mới
+    saved[name] = { name, pass, stars:0, skins:[], customLevels:[] };
+    localStorage.setItem('GDusers', JSON.stringify(saved));
+    currentUser = saved[name];
+    stars = 0;
+    isGuest=false;
+    showMenu();
+  } else{
+    document.getElementById('loginMsg').innerText='Sai mật khẩu!';
+  }
+}
+
+function loginGuest(){
+  currentUser = { name:'Guest', stars:0, skins:[], customLevels:[] };
+  isGuest=true;
+  stars = 0;
+  showMenu();
+}
+
+function logout(){
+  currentUser=null;
+  isGuest=false;
+  document.getElementById('menu').style.display='none';
+  document.getElementById('loginMenu').style.display='block';
+}
+
+// Show main menu
+function showMenu(){
+  document.getElementById('loginMenu').style.display='none';
+  document.getElementById('menu').style.display='block';
+  updateStarDisplay();
+  updateSkinOptions();
+}
+
+// Star and Skin
+function updateStarDisplay(){ document.getElementById('starDisplay').innerText=`Sao: ${stars}`; }
+function updateSkinOptions(){
+  const skinSelect = document.getElementById('skinSelect');
+  skinSelect.innerHTML = `<option value="cube">Cube</option><option value="ball">Ball</option><option value="ufo">UFO</option>`;
+  specialSkins.forEach(s=>{
+    if(stars>=s.requiredStars){
+      const opt = document.createElement('option'); opt.value=s.name; opt.textContent=s.name+' (Đặc biệt)'; skinSelect.appendChild(opt);
+    }
+  });
+}
+
+function setPlayerColor(){
+  if(player.type==='cube') player.color='red';
+  else if(player.type==='ball') player.color='blue';
+  else if(player.type==='ufo') player.color='green';
+  else{ const special = specialSkins.find(s=>s.name===player.type); player.color = special?special.color:'white'; }
+}
+
+// Game
+canvas.addEventListener('click',()=>{
+  if(gameRunning && player.onGround){player.vy=-15; player.onGround=false;}
+  else if(!gameRunning && mode){ addEditorObject(event); }
+});
+
+function startGame(selectedLevel){
+  document.getElementById('menu').style.display='none';
+  canvas.style.display='block';
+  level = selectedLevel;
+  player.type = document.getElementById('skinSelect').value;
+  setPlayerColor();
+  resetLevelObjects();
+  score=0; player.y=300; player.vy=0; player.onGround=true;
+  gameRunning=true;
+  requestAnimationFrame(gameLoop);
+}
+
+function resetLevelObjects(){
+  const lvl = levels[level-1];
+  currentObstacles = lvl.obstacles.map(o=>({...o}));
+  currentPortals = lvl.portals.map(p=>({...p}));
+}
+
+function drawPortal(portal){
+  const pt = portalsTypes[portal.type]||portalsTypes.cube;
+  ctx.fillStyle=pt.color;
+  if(pt.shape==='circle'){ ctx.beginPath(); ctx.arc(portal.x+portal.width/2,portal.y+portal.height/2,portal.width/2,0,Math.PI*2); ctx.fill();}
+  else if(pt.shape==='wave'){ ctx.beginPath(); const h=8; ctx.moveTo(portal.x,portal.y+portal.height); for(let i=0;i<=portal.width;i+=5){ const y=(i%10===0)?portal.y+portal.height-h:portal.y+portal.height; ctx.lineTo(portal.x+i,y);} ctx.lineTo(portal.x+portal.width,portal.y+portal.height); ctx.lineTo(portal.x+portal.width,portal.y); ctx.lineTo(portal.x,portal.y); ctx.closePath(); ctx.fill();}
+  else ctx.fillRect(portal.x,portal.y,portal.width,portal.height);
+}
+
+function gameLoop(){
+  if(!gameRunning) return;
+  const lvl = levels[level-1];
+  ctx.fillStyle=lvl.bgColor; ctx.fillRect(0,0,canvas.width,canvas.height);
+  player.vy+=gravity; player.y+=player.vy;
+  if(player.y+player.height>=380){player.y=380-player.height; player.vy=0; player.onGround=true;}
+  ctx.fillStyle=player.color;
+  if(player.type==='ball'){ ctx.beginPath(); ctx.arc(player.x+player.width/2,player.y+player.height/2,player.width/2,0,Math.PI*2); ctx.fill();}
+  else ctx.fillRect(player.x,player.y,player.width,player.height);
+
+  currentObstacles.forEach(ob=>{ ob.x-=lvl.speed; ctx.fillStyle='lightgray'; ctx.fillRect(ob.x,ob.y,ob.width,ob.height);
+    if(player.x<ob.x+ob.width && player.x+player.width>ob.x && player.y<ob.y+ob.height && player.y+player.height>ob.y){ alert(`Game Over! Score: ${score}`); resetGame(); return; }});
+
+  currentPortals.forEach((portal,index)=>{ portal.x-=lvl.speed; drawPortal(portal); if(player.x<portal.x+portal.width && player.x+player.width>portal.x && player.y<portal.y+portal.height && player.y+player.height>portal.y){ player.type=portal.type; setPlayerColor(); currentPortals.splice(index,1); }});
+
+  score++;
+  ctx.fillStyle='white'; ctx.font='20px Arial';
+  ctx.fillText(`Score: ${score}`,700,30);
+  ctx.fillText(`Level: ${level}`,600,30);
+  ctx.fillText(`Skin: ${player.type}`,20,30);
+
+  const allObstaclesGone=currentObstacles.every(o=>o.x+o.width<0);
+  const allPortalsGone=currentPortals.every(p=>p.x+p.width<0);
+  if(allObstaclesGone && allPortalsGone){
+    stars+=level;
+    if(!isGuest){ currentUser.stars=stars; saveUserData(); }
+    updateStarDisplay();
+    alert(`Chúc mừng bạn thắng Level ${level}! Nhận ${level} sao. Tổng sao: ${stars}`);
+    resetGame(); return;
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+function resetGame(){
+  gameRunning=false; currentObstacles=[]; currentPortals=[]; score=0; player.y=300; player.vy=0; player.onGround=true;
+  document.getElementById('menu').style.display='block'; canvas.style.display='none'; updateSkinOptions();
+}
+
+// Editor
+function openEditor(){ document.getElementById('menu').style.display='none'; document.getElementById('editorMenu').style.display='block'; canvas.style.display='block'; mode=null; drawEditor();}
+function closeEditor(){ document.getElementById('editorMenu').style.display='none'; canvas.style.display='none'; document.getElementById('menu').style.display='block';}
+function setEditorMode(m){ mode=m; }
+function addEditorObject(e){ const rect=canvas.getBoundingClientRect(); const x=e.clientX-rect.left; const y=e.clientY-rect.top; if(mode==='obstacle') editorLevel.obstacles.push({x,y,width:20,height:30}); if(mode==='portal') editorLevel.portals.push({x,y,width:30,height:30,type:portalType}); drawEditor();}
+function drawEditor(){ ctx.fillStyle='#222'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='lightgray'; editorLevel.obstacles.forEach(ob=>ctx.fillRect(ob.x,ob.y,ob.width,ob.height)); editorLevel.portals.forEach(p=>drawPortal(p)); }
+function playCustomLevel(){ currentObstacles = editorLevel.obstacles.map(o=>({...o})); currentPortals=editorLevel.portals.map(p=>({...p})); score=0; player.x=50; player.y=300; player.vy=0; player.onGround=true; gameRunning=true; requestAnimationFrame(gameLoop);}
+function clearEditor(){ editorLevel.obstacles=[]; editorLevel.portals=[]; drawEditor(); }
+
+// Save user
+function saveUserData(){ if(!isGuest){ let saved=JSON.parse(localStorage.getItem('GDusers')||'{}'); saved[currentUser.name]=currentUser; localStorage.setItem('GDusers',JSON.stringify(saved)); } }
+
+// Init
+updateStarDisplay();
+updateSkinOptions();
+</script>
+</body>
+</html>
